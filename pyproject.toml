@@ -5,8 +5,6 @@ description = "Multiprocess pipeline toolkit"
 authors = ["ali <amodaresi@corporatings.com>"]
 license = "MIT"
 readme = "README.rst"
-packages = [{include = "src", from="."}]
-
 
 [tool.poetry.dependencies]
 python = "^3.11"
