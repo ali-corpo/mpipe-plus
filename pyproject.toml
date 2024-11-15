@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "mpipe-plus"
+version = "2.0.0"
+description = "Multiprocess pipeline toolkit"
+authors = ["ali <amodaresi@corporatings.com>"]
+license = "MIT"
+readme = "README.rst"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+tblib = "^3.0.0"
+
+[tool.poetry.group.dev.dependencies]
+Sphinx = "^8.1.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
