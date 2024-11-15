@@ -44,7 +44,7 @@ class Test(Command):
 from src import __version__
 
 setup(
-    name         = 'mpipe',
+    name         = 'mpipe_plus',
     version      = __version__,
     description  = 'Multiprocess pipeline toolkit',
     url          = 'http://vmlaker.github.io/mpipe',
@@ -52,8 +52,8 @@ setup(
     author_email = 'velimir.mlaker@gmail.com',
     license      = 'MIT',
     long_description = open('README.rst').read(),
-    package_dir  = {'mpipe' : 'src'},
-    packages     = ['mpipe'],
+    package_dir  = {'mpipe_plus' : 'src'},
+    packages     = ['mpipe_plus'],
     cmdclass     = { 'clean2' : Clean2, 'test' : Test, },
     classifiers  = [
         'Development Status :: 5 - Production/Stable',
