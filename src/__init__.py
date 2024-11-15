@@ -10,3 +10,4 @@ from .UnorderedStage import UnorderedStage
 from .Pipeline import Pipeline
 from .FilterWorker import FilterWorker
 from .FilterStage import FilterStage
+from .work_exception import WorkException
