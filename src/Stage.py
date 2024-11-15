@@ -1,6 +1,15 @@
 """Implements Stage class."""
 
-class Stage(object):
+from typing import Generic, Self, TypeVar
+
+from .Tube import Tube
+
+T = TypeVar('T')
+Q = TypeVar('Q')
+Z = TypeVar('Z')
+
+
+class Stage(Generic[T, Q]):
     """The Stage is an assembly of workers of identical functionality."""
 
     def __init__(
@@ -8,8 +17,9 @@ class Stage(object):
         worker_class, 
         size=1,
         disable_result=False,
-        do_stop_task=False, 
-        input_tube=None,
+        # do_stop_task=False, 
+        input_tube:Tube[tuple[T|None,int]]|None=None,
+        name=None,
         **worker_args
         ):
         """Create a stage of workers of given *worker_class* implementation, 
@@ -23,45 +33,37 @@ class Stage(object):
         implement your worker so that, in addition to regular incoming tasks,
         it handles the ``None`` value as well. This will be
         the worker's final task before the process exits.
-
+        
         Any worker initialization arguments are given in *worker_args*."""
         self._worker_class = worker_class
         self._worker_args = worker_args
         self._size = size
         self._disable_result = disable_result
-        self._do_stop_task = do_stop_task
-        self._input_tube = self._worker_class.getTubeClass()() \
+        # self._do_stop_task = do_stop_task
+        self._input_tube:Tube[tuple[T|None,int]] = self._worker_class.getTubeClass()() \
                            if not input_tube else input_tube
-        self._output_tubes = list()
-        self._next_stages = list()
-
-    def put(self, task):
+        self._output_tubes = list[Tube[tuple[Q|None,int]]]()
+        self._next_stages = list[Stage]()
+        self.name=name or self._worker_class.__name__
+        
+    def put(self, task:T|None):
         """Put *task* on the stage's input tube."""
         self._input_tube.put((task,0))
 
-    def get(self, timeout=None):
+    def get(self, timeout:float|None=None):
         """Retrieve results from all the output tubes."""
         valid = False
         result = None
         for tube in self._output_tubes:
-            if timeout:
-                valid, result = tube.get(timeout)
-                if valid:
-                    result = result[0]
-            else:
-                result = tube.get()[0]
-        if timeout:
-            return valid, result
+            result = tube.get()[0]
         return result
 
     def results(self):
         """Return a generator to iterate over results from the stage."""
-        while True:
-            result = self.get()
-            if result is None: break
+        while result := self.get():
             yield result
 
-    def link(self, next_stage):
+    def link(self, next_stage:"Stage[Q,Z]")  -> Self:
         """Link to the given downstream stage *next_stage*
         by adding its input tube to the list of this stage's output tubes.
         Return this stage."""
@@ -70,9 +72,9 @@ class Stage(object):
         self._next_stages.append(next_stage)
         return self
 
-    def getLeaves(self):
+    def getLeaves(self)->list["Stage"]:
         """Return the downstream leaf stages of this stage."""
-        result = list()
+        result = list[Stage]()
         if not self._next_stages:
             result.append(self)
         else:
@@ -96,9 +98,13 @@ class Stage(object):
             self._output_tubes,
             self._size,
             self._disable_result,
-            self._do_stop_task,
+            # self._do_stop_task,
+            self.name
             )
 
         # Build all downstream stages.
         for stage in self._next_stages:
             stage.build()
+
+    
+    

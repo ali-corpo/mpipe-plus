@@ -15,6 +15,9 @@ class _Worker(OrderedWorker):
         return self.task_fn(task)
 
 
+    def __str__(self):
+        return self.task_fn.__name__
+
 class OrderedStage(Stage):
     """A specialized :class:`~mpipe.Stage`, 
     internally creating :class:`~mpipe.OrderedWorker` objects."""

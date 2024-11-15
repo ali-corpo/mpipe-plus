@@ -1,9 +1,21 @@
 """Implements OrderedWorker class."""
 
+import abc
+import logging
 import multiprocessing
+from multiprocessing.synchronize import Lock
+import time
+from typing import Generic, TypeVar
+
+from .timer import Timer
+
+from .Tube import Tube
 from .TubeP import TubeP
 
-class OrderedWorker(multiprocessing.Process):
+T = TypeVar('T')
+Q = TypeVar('Q')
+
+class OrderedWorker(multiprocessing.Process,abc.ABC, Generic[T, Q]):
     """An OrderedWorker object operates in a stage where the order 
     of output results always matches that of corresponding input tasks.
 
@@ -14,40 +26,51 @@ class OrderedWorker(multiprocessing.Process):
     a worker first waits for its previous neighbor to do the same."""
 
     def __init__(self):
+        self.process_executed={
+            "doInit":Timer("init"),
+            "doTask":Timer("perTask",per_item=True),
+            "doDispose":Timer("dispose"),
+            "task_get_input":Timer("avg_in_wait",per_item=True),
+            "task_put_output":Timer("avg_out_wait",disable=True,per_item=True),
+        }
+
         pass
 
     def init2(
         self, 
-        input_tube,      # Read task from the input tube.
-        output_tubes,    # Send result on all the output tubes.
-        num_workers,     # Total number of workers in the stage.
-        disable_result,  # Whether to override any result with None.
-        do_stop_task,    # Whether to call doTask() on "stop" request.
+        input_tube:Tube[tuple[T|None,int]],      # Read task from the input tube.
+        output_tubes:list[Tube[tuple[Q|None,int]]],    # Send result on all the output tubes.
+        num_workers:int,     # Total number of workers in the stage.
+        disable_result:bool,  # Whether to override any result with None.
+        # do_stop_task:bool,    # Whether to call doTask() on "stop" request.
+        name:str,
+        index:int
         ):
         """Create *num_workers* worker objects with *input_tube* and 
         an iterable of *output_tubes*. The worker reads a task from *input_tube* 
         and writes the result to *output_tubes*."""
 
         super(OrderedWorker, self).__init__()
+        self.index=index
         self._tube_task_input = input_tube
         self._tubes_result_output = output_tubes
         self._num_workers = num_workers
 
         # Serializes reading from input tube.
-        self._lock_prev_input = None
-        self._lock_next_input = None
+        self._lock_prev_input:Lock|None = None
+        self._lock_next_input:Lock|None = None
 
         # Serializes writing to output tube.
-        self._lock_prev_output = None
-        self._lock_next_output = None
+        self._lock_prev_output:Lock|None = None
+        self._lock_next_output:Lock|None = None
 
         self._disable_result = disable_result
-        self._do_stop_task = do_stop_task
-
+        self._do_stop_task = False
+        self.worker_name=name
     @staticmethod
     def getTubeClass():
         """Return the tube class implementation."""
-        return TubeP
+        return TubeP[tuple[T,int]|None]
 
     @classmethod
     def assemble(
@@ -57,7 +80,8 @@ class OrderedWorker(multiprocessing.Process):
         output_tubes, 
         size, 
         disable_result=False,
-        do_stop_task=False,
+        # do_stop_task=False,
+        name:str=""
         ):
         """Create, assemble and start workers.
         Workers are created of class *cls*, initialized with *args*, and given
@@ -75,7 +99,9 @@ class OrderedWorker(multiprocessing.Process):
                 output_tubes,
                 size,
                 disable_result,
-                do_stop_task,
+                # do_stop_task,
+                name=name,
+                index=ii
                 )
             workers.append(worker)
 
@@ -96,7 +122,7 @@ class OrderedWorker(multiprocessing.Process):
         """Link the worker to the given next worker object, 
         connecting the two workers with communication tubes."""
 
-        lock = multiprocessing.Lock()
+        lock: Lock = multiprocessing.Lock()
         next_worker._lock_prev_input = lock
         self._lock_next_input = lock
         lock.acquire()
@@ -111,22 +137,29 @@ class OrderedWorker(multiprocessing.Process):
             self._lock_next_input.release()
             self._lock_next_output.release()
 
-    def putResult(self, result):
+    def putResult(self, result:Q):
         """Register the *result* by putting it on all the output tubes."""
+        assert self._lock_prev_output
+        assert self._lock_next_output
         self._lock_prev_output.acquire()
         for tube in self._tubes_result_output:
-            tube.put((result, 0))
+            tube.put((result,0))
         self._lock_next_output.release()
         
     def run(self):
-
+        assert self._lock_prev_input
+        assert self._lock_next_input
         # Run implementation's initialization.
+        s=time.time()
         self.doInit()
+        self.process_executed['doInit'].add_from_time(s)
+        
 
         while True:
             try:
                 # Wait on permission from the previous worker that
                 # it is okay to retrieve the input task.
+                s=time.time()
                 self._lock_prev_input.acquire()
 
                 # Retrieve the input task.
@@ -134,9 +167,11 @@ class OrderedWorker(multiprocessing.Process):
 
                 # Permit the next worker to retrieve the input task.
                 self._lock_next_input.release()
-
-            except:
+                self.process_executed['task_get_input'].add_from_time(s)
+            except Exception    as e:
+                print(e)
                 (task, count) = (None, 0)
+
 
             # In case the task is None, it represents the "stop" request,
             # the count being the number of workers in this stage that had
@@ -155,37 +190,53 @@ class OrderedWorker(multiprocessing.Process):
                     # guaranteed (from the count value) that this is the last worker alive. 
                     # Therefore, just put the "stop" signal on the result tube.
                     for tube in self._tubes_result_output:
-                        tube.put((None, 0))
+                        tube.put((None,0))
 
                 else:
                     self._tube_task_input.put((None, count))
 
-                # In case we're calling doTask() on a "stop" request, do so now.
-                if self._do_stop_task:
-                    self.doTask(None)
+                # # In case we're calling doTask() on a "stop" request, do so now.
+                # if self._do_stop_task:
+                #     self.doTask(None)
 
                 # Honor the "stop" request by exiting the process.
                 break  
 
             # The task is not None, meaning that it is an actual task to
             # be processed. Therefore let's call doTask().
+            s=time.time()
             result = self.doTask(task)
-
+            
+            self.process_executed['doTask'].add_from_time(s)
             # Unless result is disabled,
             # if doTask() actually returns a result (and the result is not None),
             # it indicates that it did not call putResult(), instead intending
             # it to be called now.
             if not self._disable_result and result is not None:
+                s:float = time.time()
                 self.putResult(result)
+                self.process_executed['task_put_output'].add_from_time(s)
+        
+        s=time.time()
+        self.doDispose()
+        self.process_executed['doDispose'].add_from_time(s)
+        
+        stats=self.process_executed
+        # avg_out_wait:{stats['task_put_output']/stats['task_count']:.2f}s
+        res=" ".join(f"{str(v):>30}" for k,v in stats.items() if v.elapsed_time>.001)
+        print(f"[{self.index}]{str(self):<10}: {res}")
 
-    def doTask(self, task):
+
+    @abc.abstractmethod
+    def doTask(self, task:T)->Q:
         """Implement this method in the subclass with work functionality
         to be executed on each *task* object.
         The implementation can publish the output result in one of two ways,
         either by 1) calling :meth:`putResult` and returning ``None``, or
         2) returning the result (other than ``None``)."""
-        return True
+        pass    
 
+    
     def doInit(self):
         """Implement this method in the subclass in case there's need
         for additional initialization after process startup.
@@ -195,3 +246,12 @@ class OrderedWorker(multiprocessing.Process):
         before the worker begins processing input tasks.
         """
         return None
+
+    def doDispose(self):
+        """Implement this method in the subclass in case there's need
+        for additional cleanup after process termination.
+        """
+        return None
+    
+    def __str__(self):
+        return self.worker_name
