@@ -14,3 +14,8 @@ class Tube(abc.ABC,Generic[T]):
     def get(self, timeout:float|None=None)->T:
         """Return the next available item from the tube."""
         pass
+
+    @abc.abstractmethod
+    def close(self):
+        """Close the tube."""
+        pass

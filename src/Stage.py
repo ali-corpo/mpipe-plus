@@ -18,7 +18,7 @@ class Stage(Generic[T, Q]):
         size=1,
         disable_result=False,
         # do_stop_task=False, 
-        input_tube:Tube[tuple[T|None,int]]|None=None,
+        input_tube:Tube[tuple[T|Exception,int]]|None=None,
         name=None,
         **worker_args
         ):
@@ -40,13 +40,13 @@ class Stage(Generic[T, Q]):
         self._size = size
         self._disable_result = disable_result
         # self._do_stop_task = do_stop_task
-        self._input_tube:Tube[tuple[T|None,int]] = self._worker_class.getTubeClass()() \
+        self._input_tube:Tube[tuple[T|Exception,int]] = self._worker_class.getTubeClass()() \
                            if not input_tube else input_tube
         self._output_tubes = list[Tube[tuple[Q|None,int]]]()
         self._next_stages = list[Stage]()
         self.name=name or self._worker_class.__name__
         
-    def put(self, task:T|None):
+    def put(self, task:T|Exception):
         """Put *task* on the stage's input tube."""
         self._input_tube.put((task,0))
 

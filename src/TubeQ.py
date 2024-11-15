@@ -28,3 +28,6 @@ class TubeQ(Tube[T]):
             raise TimeoutError
         
         
+
+    def close(self):
+        self._queue.close()

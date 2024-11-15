@@ -2,6 +2,8 @@
 import abc
 from typing import Any, Generic, Iterable, TypeVar
 
+from .work_exception import WorkException
+
 from . import Stage
 
 
@@ -18,17 +20,28 @@ class Pipeline(Generic[T,Q]):
         self._input_stage.build()
         
 
-    def put(self, task:T):
+    def put(self, task:T|Exception):
         """Put *task* on the pipeline."""
         self._input_stage.put(task)
         
 
     def get(self, timeout:float|None=None)->Q|None:
         """Return result from the pipeline."""
-        result = None
+        res = None
         for stage in self._output_stages:
             result = stage.get(timeout)
-        return result
+            if isinstance(result, WorkException):
+                self.put(result)
+                result.re_raise()
+            if isinstance(result, KeyboardInterrupt):
+                print("KeyboardInterrupt")
+                return
+            if isinstance(result, StopIteration):
+                continue
+            if isinstance(result, Exception):
+                raise result
+            res = result
+        return res
 
     def results(self):
         """Return a generator to iterate over results from the pipeline."""
@@ -38,5 +51,5 @@ class Pipeline(Generic[T,Q]):
     def run(self,inputs: Iterable[T])->Iterable[Q]:
         for input in inputs:
             self._input_stage.put(input)
-        self._input_stage.put(None)
+        self._input_stage.put(StopIteration())
         return self.results()

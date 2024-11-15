@@ -28,3 +28,6 @@ class TubeP(Tube[T]):
         else:
             raise multiprocessing.TimeoutError
 
+    def close(self):
+        self._conn1.close()
+        self._conn2.close()

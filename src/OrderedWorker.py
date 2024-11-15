@@ -7,6 +7,8 @@ from multiprocessing.synchronize import Lock
 import time
 from typing import Generic, TypeVar
 
+from .work_exception import WorkException
+
 from .timer import Timer
 
 from .Tube import Tube
@@ -38,8 +40,8 @@ class OrderedWorker(multiprocessing.Process,abc.ABC, Generic[T, Q]):
 
     def init2(
         self, 
-        input_tube:Tube[tuple[T|None,int]],      # Read task from the input tube.
-        output_tubes:list[Tube[tuple[Q|None,int]]],    # Send result on all the output tubes.
+        input_tube:Tube[tuple[T|BaseException,int]],      # Read task from the input tube.
+        output_tubes:list[Tube[tuple[Q|BaseException,int]]],    # Send result on all the output tubes.
         num_workers:int,     # Total number of workers in the stage.
         disable_result:bool,  # Whether to override any result with None.
         # do_stop_task:bool,    # Whether to call doTask() on "stop" request.
@@ -137,14 +139,17 @@ class OrderedWorker(multiprocessing.Process,abc.ABC, Generic[T, Q]):
             self._lock_next_input.release()
             self._lock_next_output.release()
 
-    def putResult(self, result:Q):
+    def putResult(self, result:Q|BaseException,lock=True):
         """Register the *result* by putting it on all the output tubes."""
         assert self._lock_prev_output
         assert self._lock_next_output
-        self._lock_prev_output.acquire()
+        if lock:
+            self._lock_prev_output.acquire()
+        
         for tube in self._tubes_result_output:
             tube.put((result,0))
-        self._lock_next_output.release()
+        if lock:
+            self._lock_next_output.release()
         
     def run(self):
         assert self._lock_prev_input
@@ -154,78 +159,96 @@ class OrderedWorker(multiprocessing.Process,abc.ABC, Generic[T, Q]):
         self.doInit()
         self.process_executed['doInit'].add_from_time(s)
         
+        try:
+            while True:
+                try:
+                    # Wait on permission from the previous worker that
+                    # it is okay to retrieve the input task.
+                    s=time.time()
+                    self._lock_prev_input.acquire()
 
-        while True:
-            try:
-                # Wait on permission from the previous worker that
-                # it is okay to retrieve the input task.
-                s=time.time()
-                self._lock_prev_input.acquire()
+                    # Retrieve the input task.
+                    (task, count) = self._tube_task_input.get()
 
-                # Retrieve the input task.
-                (task, count) = self._tube_task_input.get()
-
-                # Permit the next worker to retrieve the input task.
-                self._lock_next_input.release()
-                self.process_executed['task_get_input'].add_from_time(s)
-            except Exception    as e:
-                print(e)
-                (task, count) = (None, 0)
+                    # Permit the next worker to retrieve the input task.
+                    self._lock_next_input.release()
+                    self.process_executed['task_get_input'].add_from_time(s)
+                except Exception    as e:
+                    print(e)
+                    (task, count) = (e, 0)
 
 
-            # In case the task is None, it represents the "stop" request,
-            # the count being the number of workers in this stage that had
-            # already stopped.
-            if task is None:
+                # In case the task is None, it represents the "stop" request,
+                # the count being the number of workers in this stage that had
+                # already stopped.
+                
+                if isinstance(task, StopIteration) :
 
-                # If this worker is the last one (of its stage) to receive the 
-                # "stop" request, propagate "stop" to the next stage. Otherwise,
-                # maintain the "stop" signal in this stage for another worker that
-                # will pick it up. 
-                count += 1
-                if count == self._num_workers:
+                    # If this worker is the last one (of its stage) to receive the 
+                    # "stop" request, propagate "stop" to the next stage. Otherwise,
+                    # maintain the "stop" signal in this stage for another worker that
+                    # will pick it up. 
+                    count += 1
+                    if count == self._num_workers:
+                        # Propagating the "stop" to the next stage does not require
+                        # synchronization with previous and next worker because we're
+                        # guaranteed (from the count value) that this is the last worker alive. 
+                        # Therefore, just put the "stop" signal on the result tube.
+                        self.putResult(task,lock=False)#maybe without lock
+                    else:
+                        self._tube_task_input.put((task, count))
+
+                    # # In case we're calling doTask() on a "stop" request, do so now.
+                    # if self._do_stop_task:
+                    #     self.doTask(None)
+
+                    # Honor the "stop" request by exiting the process.
+                    break  
+                if isinstance(task, BaseException):
+                    self._tube_task_input.put((task, count+1))
+                    raise task
                     
-                    # Propagating the "stop" to the next stage does not require
-                    # synchronization with previous and next worker because we're
-                    # guaranteed (from the count value) that this is the last worker alive. 
-                    # Therefore, just put the "stop" signal on the result tube.
-                    for tube in self._tubes_result_output:
-                        tube.put((None,0))
-
-                else:
-                    self._tube_task_input.put((None, count))
-
-                # # In case we're calling doTask() on a "stop" request, do so now.
-                # if self._do_stop_task:
-                #     self.doTask(None)
-
-                # Honor the "stop" request by exiting the process.
-                break  
-
-            # The task is not None, meaning that it is an actual task to
-            # be processed. Therefore let's call doTask().
+                    
+                # The task is not None, meaning that it is an actual task to
+                # be processed. Therefore let's call doTask().
+                s=time.time()
+                try:
+                    result = self.doTask(task)
+                except Exception as e:
+                    raise WorkException(e, self, task)
+        
+                self.process_executed['doTask'].add_from_time(s)
+                # Unless result is disabled,
+                # if doTask() actually returns a result (and the result is not None),
+                # it indicates that it did not call putResult(), instead intending
+                # it to be called now.
+                if not self._disable_result and result is not None:
+                    s:float = time.time()
+                    self.putResult(result)
+                    self.process_executed['task_put_output'].add_from_time(s)
+                
+        except WorkException as e:
+            self.putResult(e)
+            self.close_pipes()
+        except KeyboardInterrupt as e:
+            self.putResult(e)
+        except Exception as e:
+            self.putResult(WorkException(e, self, None))
+            self.close_pipes()
+        finally:
             s=time.time()
-            result = self.doTask(task)
+            self.doDispose()
+            self.process_executed['doDispose'].add_from_time(s)
             
-            self.process_executed['doTask'].add_from_time(s)
-            # Unless result is disabled,
-            # if doTask() actually returns a result (and the result is not None),
-            # it indicates that it did not call putResult(), instead intending
-            # it to be called now.
-            if not self._disable_result and result is not None:
-                s:float = time.time()
-                self.putResult(result)
-                self.process_executed['task_put_output'].add_from_time(s)
-        
-        s=time.time()
-        self.doDispose()
-        self.process_executed['doDispose'].add_from_time(s)
-        
-        stats=self.process_executed
-        # avg_out_wait:{stats['task_put_output']/stats['task_count']:.2f}s
-        res=" ".join(f"{str(v):>30}" for k,v in stats.items() if v.elapsed_time>.001)
-        print(f"[{self.index}]{str(self):<10}: {res}")
+            stats=self.process_executed
+            # avg_out_wait:{stats['task_put_output']/stats['task_count']:.2f}s
+            res=" ".join(f"{str(v):>30}" for k,v in stats.items() if v.elapsed_time>.001)
+            print(f"[{self.index}]{str(self):<10}: {res}")
 
+    def close_pipes(self):
+        self._tube_task_input.close()
+        for tube in self._tubes_result_output:
+            tube.close()
 
     @abc.abstractmethod
     def doTask(self, task:T)->Q:
