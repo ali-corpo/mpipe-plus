@@ -11,8 +11,8 @@ from .work_exception import WorkException
 
 from .timer import Timer
 
-from .Tube import Tube
-from .TubeP import TubeP
+from .tube import Tube
+from .tube_p import TubeP
 
 T = TypeVar('T')
 Q = TypeVar('Q')
@@ -27,15 +27,7 @@ class OrderedWorker(multiprocessing.Process,abc.ABC, Generic[T, Q]):
     Input tasks are fetched in this order. Before publishing its result, 
     a worker first waits for its previous neighbor to do the same."""
 
-    def __init__(self):
-        self.process_executed={
-            "doInit":Timer("init"),
-            "doTask":Timer("perTask",per_item=True),
-            "doDispose":Timer("dispose"),
-            "task_get_input":Timer("avg_in_wait",per_item=True),
-            "task_put_output":Timer("avg_out_wait",disable=True,per_item=True),
-        }
-
+    def __init__(self) -> None:
         pass
 
     def init2(
@@ -53,6 +45,13 @@ class OrderedWorker(multiprocessing.Process,abc.ABC, Generic[T, Q]):
         and writes the result to *output_tubes*."""
 
         super(OrderedWorker, self).__init__()
+        self.process_executed={
+            "doInit":Timer("init"),
+            "doTask":Timer("perTask",per_item=True),
+            "doDispose":Timer("dispose"),
+            "task_get_input":Timer("avg_in_wait",per_item=True),
+            "task_put_output":Timer("avg_out_wait",disable=True,per_item=True),
+        }
         self.index=index
         self._tube_task_input = input_tube
         self._tubes_result_output = output_tubes
@@ -72,7 +71,7 @@ class OrderedWorker(multiprocessing.Process,abc.ABC, Generic[T, Q]):
     @staticmethod
     def getTubeClass():
         """Return the tube class implementation."""
-        return TubeP[tuple[T,int]|None]
+        return TubeP[tuple[tuple[int,T],int]|None]
 
     @classmethod
     def assemble(
@@ -155,24 +154,23 @@ class OrderedWorker(multiprocessing.Process,abc.ABC, Generic[T, Q]):
         assert self._lock_prev_input
         assert self._lock_next_input
         # Run implementation's initialization.
-        s=time.time()
-        self.doInit()
-        self.process_executed['doInit'].add_from_time(s)
+        with self.process_executed['doInit']:
+            self.doInit()
+        
         
         try:
             while True:
                 try:
                     # Wait on permission from the previous worker that
                     # it is okay to retrieve the input task.
-                    s=time.time()
-                    self._lock_prev_input.acquire()
+                    with self.process_executed['task_get_input']:
+                        self._lock_prev_input.acquire()
 
-                    # Retrieve the input task.
-                    (task, count) = self._tube_task_input.get()
+                        # Retrieve the input task.
+                        (task, count) = self._tube_task_input.get()
 
-                    # Permit the next worker to retrieve the input task.
-                    self._lock_next_input.release()
-                    self.process_executed['task_get_input'].add_from_time(s)
+                        # Permit the next worker to retrieve the input task.
+                        self._lock_next_input.release()
                 except Exception    as e:
                     print(e)
                     (task, count) = (e, 0)
@@ -211,21 +209,22 @@ class OrderedWorker(multiprocessing.Process,abc.ABC, Generic[T, Q]):
                     
                 # The task is not None, meaning that it is an actual task to
                 # be processed. Therefore let's call doTask().
-                s=time.time()
-                try:
-                    result = self.doTask(task)
-                except Exception as e:
-                    raise WorkException(e, self, task)
+                
+                with self.process_executed['doTask']:
+
+                    try:
+                        result = self.doTask(task)
+                    except Exception as e:
+                        raise WorkException(e, self, task)
         
-                self.process_executed['doTask'].add_from_time(s)
                 # Unless result is disabled,
                 # if doTask() actually returns a result (and the result is not None),
                 # it indicates that it did not call putResult(), instead intending
                 # it to be called now.
                 if not self._disable_result and result is not None:
-                    s:float = time.time()
-                    self.putResult(result)
-                    self.process_executed['task_put_output'].add_from_time(s)
+                    with self.process_executed['task_put_output']:
+                        self.putResult(result)
+                    
                 
         except WorkException as e:
             self.putResult(e)
@@ -236,14 +235,12 @@ class OrderedWorker(multiprocessing.Process,abc.ABC, Generic[T, Q]):
             self.putResult(WorkException(e, self, None))
             self.close_pipes()
         finally:
-            s=time.time()
-            self.doDispose()
-            self.process_executed['doDispose'].add_from_time(s)
+            with self.process_executed['doDispose']:
+                self.doDispose()
             
-            stats=self.process_executed
             # avg_out_wait:{stats['task_put_output']/stats['task_count']:.2f}s
-            res=" ".join(f"{str(v):>30}" for k,v in stats.items() if v.elapsed_time>.001)
-            print(f"[{self.index}]{str(self):<10}: {res}")
+            stats=" ".join(f"{str(v):>30}" for k,v in self.process_executed.items() if v.elapsed_time>.001)
+            print(f"[{self.index}]{str(self):<10}: {stats}")
 
     def close_pipes(self):
         self._tube_task_input.close()

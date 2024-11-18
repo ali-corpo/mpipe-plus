@@ -1,6 +1,6 @@
 """Implements FilterStage class."""
 
-from .Stage import Stage
+from ..Stage import Stage
 from .FilterWorker import FilterWorker
 
 class FilterStage(Stage):
@@ -16,7 +16,7 @@ class FilterStage(Stage):
         ):
         super(FilterStage, self).__init__(
             FilterWorker, 
-            size=1, 
+            num_worker=1, 
             do_stop_task=do_stop_task,
             stages=stages,
             max_tasks=max_tasks,

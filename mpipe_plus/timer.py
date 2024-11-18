@@ -8,15 +8,20 @@ class Timer:
     def __init__(self, name,disable=False,per_item=False):
         self.disable = disable
         self.name = name
-        self.elapsed_time =0
+        self.elapsed_time =0.0
         self.count = 0
         self.per_item = per_item
-        self.lock = multiprocessing.Lock()  
 
+    def __enter__(self):
+        self.start_time = time.time()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.add_from_time(self.start_time)
+        
     def add_from_time(self, from_time):
-        with self.lock:
-            self.count += 1
-            self.elapsed_time += time.time()-from_time    
+        self.count += 1
+        self.elapsed_time += time.time()-from_time    
     def __str__(self):
         if self.disable:
             return ""

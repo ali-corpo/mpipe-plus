@@ -2,7 +2,7 @@
 
 import sys
 from .OrderedWorker import OrderedWorker
-from .Pipeline import Pipeline
+from ..pipeline import Pipeline
 
 class FilterWorker(OrderedWorker):
     """FilterWorker filters input to sub-pipelines."""

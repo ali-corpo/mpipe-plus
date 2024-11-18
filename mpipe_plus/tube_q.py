@@ -3,7 +3,7 @@
 import multiprocessing
 from typing import TypeVar
 
-from .Tube import Tube
+from .tube import Tube
 
 T = TypeVar('T')
 class TubeQ(Tube[T]):
@@ -22,10 +22,7 @@ class TubeQ(Tube[T]):
 
         Blocks if tube is empty, until a producer for the tube puts an item on it."""
         
-        try:
-            return  self._queue.get(True, timeout)
-        except multiprocessing.Queue.Empty:
-            raise TimeoutError
+        return  self._queue.get(True, timeout)
         
         
 

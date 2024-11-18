@@ -3,7 +3,7 @@
 import multiprocessing
 from typing import Generic, TypeVar
 
-from .Tube import Tube
+from .tube import Tube
 T = TypeVar('T')
 
 
